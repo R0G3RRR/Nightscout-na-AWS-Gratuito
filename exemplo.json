@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "SubnetId",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "DynuDomain",
+    "ParameterValue": "meusite.dynu.net"
+  },
+  {
+    "ParameterKey": "DynuLogin",
+    "ParameterValue": "meuusuario"
+  },
+  {
+    "ParameterKey": "DynuPassword",
+    "ParameterValue": "minhasenhaSegura123"
+  },
+  {
+    "ParameterKey": "ApiSecret",
+    "ParameterValue": "supersegredoSeguro123"
+  },
+  {
+    "ParameterKey": "MongoConnection",
+    "ParameterValue": "mongodb+srv://usuario:senha@cluster.mongodb.net/nightscout"
+  }
+]
