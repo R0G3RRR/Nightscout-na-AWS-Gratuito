@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "🚀 Deploy automatizado do Nightscout com rede condicional e parâmetros para Dynu, API_SECRET e MongoDB."
+
+# ===========================================================
+# PARÂMETROS
+# ===========================================================
+Parameters:
+  VpcId:
+    Type: String
+    Default: ""
+    Description: "ID da VPC existente (deixe em branco para criar uma nova)."
+
+  SubnetId:
+    Type: String
+    Default: ""
+    Description: "ID da Subnet existente (deixe em branco para criar uma nova)."
+
+  DynuDomain:
+    Type: String
+    Description: "Domínio Dynu configurado exemplo nsroger.ddnsfree.com"
+
+  DynuLogin:
+    Type: String
+    Description: "Login da conta Dynu"
+
+  DynuPassword:
+    Type: String
+    NoEcho: true
+    Description: "Senha da conta Dynu (ocultada no CloudFormation)"
+
+  ApiSecret:
+    Type: String
+    NoEcho: true
+    Description: "API_SECRET usado pelo Nightscout"
+
+  MongoConnection:
+    Type: String
+    NoEcho: true
+    Description: "String de conexão MongoDB para o Nightscout"
+
+# ===========================================================
+# CONDIÇÕES
+# ===========================================================
+Conditions:
+  CreateNetwork: !Equals [!Ref VpcId, ""]
+
+# ===========================================================
+# RECURSOS
+# ===========================================================
+Resources:
+
+  # -------------------------
+  # REDE AUTOMÁTICA (se não existir)
+  # -------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Condition: CreateNetwork
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: CreateNetwork
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-IGW"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: CreateNetwork
+    Properties:
+      VpcId: !If [CreateNetwork, !Ref VPC, !Ref "AWS::NoValue"]
+      InternetGatewayId: !If [CreateNetwork, !Ref InternetGateway, !Ref "AWS::NoValue"]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateNetwork
+    Properties:
+      VpcId: !If [CreateNetwork, !Ref VPC, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicRT"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNetwork
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNetwork
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicSubnet"
+
+  SubnetRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNetwork
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # -------------------------
+  # SECURITY GROUP
+  # -------------------------
+  NightscoutSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Acesso SSH, HTTP e HTTPS"
+      VpcId: !If [CreateNetwork, !Ref VPC, !Ref VpcId]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SG"
+
+  # -------------------------
+  # INSTÂNCIA EC2
+  # -------------------------
+  NightscoutInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.small
+      KeyName: Publica
+      ImageId: ami-07c0cae188e21a093 # Amazon Linux 2023 - sa-east-1
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref NightscoutSecurityGroup
+          SubnetId: !If [CreateNetwork, !Ref PublicSubnet, !Ref SubnetId]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Instance"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          DOMAIN="${DynuDomain}"
+          LOGIN="${DynuLogin}"
+          PASS="${DynuPassword}"
+          SECRET="${ApiSecret}"
+          MONGO="${MongoConnection}"
+
+          # ==== Validação de parâmetros ====
+          for var in "$DOMAIN" "$LOGIN" "$PASS" "$SECRET" "$MONGO"; do
+            if [ -z "$var" ]; then
+              echo "❌ Erro: Parâmetro obrigatório ausente. Abortando inicialização."
+              exit 1
+            fi
+          done
+
+          # ---- Atualização e pacotes principais ----
+          sudo dnf update -y
+          sudo dnf install -y wget docker git curl perl perl-IO-Socket-SSL nginx certbot python3-certbot-nginx bind-utils --allowerasing
+
+          # ---- Configuração Dynu DDNS (ddclient) ----
+          curl -L https://cpanmin.us | sudo perl - App::cpanminus
+          sudo cpanm --notest JSON Data::Validate::IP
+          git clone https://github.com/ddclient/ddclient.git /tmp/ddclient
+          sudo cp /tmp/ddclient/ddclient.in /usr/local/bin/ddclient
+          sudo chmod +x /usr/local/bin/ddclient
+          sudo mkdir -p /etc/ddclient/
+          cat > /etc/ddclient/ddclient.conf <<EOL
+          protocol=dyndns2
+          use=web, web=ifconfig.me
+          server=api.dynu.com
+          login=$LOGIN
+          password=$PASS
+          $DOMAIN
+          EOL
+          cat > /etc/systemd/system/ddclient.service <<EOS
+          [Unit]
+          Description=Dynamic DNS Update Client
+          After=network.target
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/ddclient -foreground -file /etc/ddclient/ddclient.conf
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+          EOS
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now ddclient
+
+          # ---- Docker + Nightscout ----
+          sudo systemctl enable --now docker
+          mkdir -p /opt/nightscout
+          cd /opt/nightscout
+          git clone https://github.com/nightscout/cgm-remote-monitor.git .
+          docker build -t nightscout .
+
+          # ---- Serviço do Nightscout ----
+          cat > /etc/systemd/system/nightscout.service <<EON
+          [Unit]
+          Description=Nightscout Service (Docker)
+          After=docker.service
+          Requires=docker.service
+          [Service]
+          Restart=always
+          ExecStart=/usr/bin/docker run --rm --name nightscout -p 1337:1337 \
+            -e AUTH_DEFAULT_ROLES='denied' \
+            -e API_SECRET='$SECRET' \
+            -e MONGO_CONNECTION='$MONGO' \
+            -e ENABLE='careportal basal dbsize rawbg iob maker bridge cob bwp cage iage sage boluscalc pushover treatmentnotify mmconnect loop pump profile food openaps bage alexa override cors' \
+            nightscout
+          [Install]
+          WantedBy=multi-user.target
+          EON
+
+          sudo systemctl enable nightscout
+          sudo systemctl start nightscout
+
+# ===========================================================
+# SAÍDAS
+# ===========================================================
+Outputs:
+  InstancePublicIP:
+    Description: "IP público da instância Nightscout"
+    Value: !GetAtt NightscoutInstance.PublicIp
+
+  NightscoutURL:
+    Description: "Endereço de acesso via Dynu"
+    Value: !Sub "https://${DynuDomain}"
