@@ -244,7 +244,6 @@ Você pode usá-lo, modificá-lo e redistribuí-lo livremente.
 ## ✨ Autor
 
 **Automação e Template por:** Roger  
-💬 Contato: [roger.uesc@live.com](mailto:roger.uesc@live.com)  
 📦 GitHub: [https://github.com/R0G3RRR/Nightscout-na-AWS-Gratuito](https://github.com/R0G3RRR/Nightscout-na-AWS-Gratuito)
 
 ---
