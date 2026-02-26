@@ -229,6 +229,7 @@ Resources:
             -e API_SECRET='$SECRET' \
             -e MONGO_CONNECTION='$MONGO' \
             -e ENABLE='careportal basal dbsize rawbg iob maker bridge cob bwp cage iage sage boluscalc pushover treatmentnotify mmconnect loop pump profile food openaps bage alexa override cors' \
+            -e INSECURE_USE_HTTP=true \
             nightscout
           [Install]
           WantedBy=multi-user.target
@@ -248,3 +249,4 @@ Outputs:
   NightscoutURL:
     Description: "Endereço de acesso via Dynu"
     Value: !Sub "https://${DynuDomain}"
+
