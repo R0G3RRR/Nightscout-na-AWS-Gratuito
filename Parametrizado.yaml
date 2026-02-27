@@ -1,128 +1,43 @@
-AWSTemplateFormatVersion: "2010-09-09"
-Description: "🚀 Deploy automatizado do Nightscout com rede condicional e parâmetros para Dynu, API_SECRET e MongoDB."
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Nightscout EC2 - Free Tier + Dynu Auto IP Update + SSL
 
-# ===========================================================
-# PARÂMETROS
-# ===========================================================
 Parameters:
-  VpcId:
-    Type: String
-    Default: ""
-    Description: "ID da VPC existente (deixe em branco para criar uma nova)."
 
-  SubnetId:
-    Type: String
-    Default: ""
-    Description: "ID da Subnet existente (deixe em branco para criar uma nova)."
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Nome do KeyPair para SSH
 
-  DynuDomain:
+  InstanceType:
     Type: String
-    Description: "Domínio Dynu configurado exemplo nsroger.ddnsfree.com"
+    Default: t2.micro
 
-  DynuLogin:
+  DomainName:
     Type: String
-    Description: "Login da conta Dynu"
+    Description: Dominio Dynu (ex: seudominio.dynu.net)
+
+  DynuUsername:
+    Type: String
+    NoEcho: true
 
   DynuPassword:
     Type: String
     NoEcho: true
-    Description: "Senha da conta Dynu (ocultada no CloudFormation)"
-
-  ApiSecret:
-    Type: String
-    NoEcho: true
-    Description: "API_SECRET usado pelo Nightscout"
 
   MongoConnection:
     Type: String
     NoEcho: true
-    Description: "String de conexão MongoDB para o Nightscout"
 
-# ===========================================================
-# CONDIÇÕES
-# ===========================================================
-Conditions:
-  CreateNetwork: !Equals [!Ref VpcId, ""]
+  ApiSecret:
+    Type: String
+    NoEcho: true
 
-# ===========================================================
-# RECURSOS
-# ===========================================================
+
 Resources:
 
-  # -------------------------
-  # REDE AUTOMÁTICA (se não existir)
-  # -------------------------
-  VPC:
-    Type: AWS::EC2::VPC
-    Condition: CreateNetwork
-    Properties:
-      CidrBlock: 10.0.0.0/16
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-VPC"
-
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Condition: CreateNetwork
-    Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-IGW"
-
-  AttachGateway:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Condition: CreateNetwork
-    Properties:
-      VpcId: !If [CreateNetwork, !Ref VPC, !Ref "AWS::NoValue"]
-      InternetGatewayId: !If [CreateNetwork, !Ref InternetGateway, !Ref "AWS::NoValue"]
-
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Condition: CreateNetwork
-    Properties:
-      VpcId: !If [CreateNetwork, !Ref VPC, !Ref "AWS::NoValue"]
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-PublicRT"
-
-  PublicRoute:
-    Type: AWS::EC2::Route
-    Condition: CreateNetwork
-    DependsOn: AttachGateway
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  PublicSubnet:
-    Type: AWS::EC2::Subnet
-    Condition: CreateNetwork
-    Properties:
-      VpcId: !Ref VPC
-      AvailabilityZone: !Select [0, !GetAZs '']
-      CidrBlock: 10.0.1.0/24
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-PublicSubnet"
-
-  SubnetRouteAssoc:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Condition: CreateNetwork
-    Properties:
-      SubnetId: !Ref PublicSubnet
-      RouteTableId: !Ref PublicRouteTable
-
-  # -------------------------
-  # SECURITY GROUP
-  # -------------------------
   NightscoutSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "Acesso SSH, HTTP e HTTPS"
-      VpcId: !If [CreateNetwork, !Ref VPC, !Ref VpcId]
+      GroupDescription: Permitir HTTP HTTPS SSH
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
@@ -136,117 +51,83 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-SG"
 
-  # -------------------------
-  # INSTÂNCIA EC2
-  # -------------------------
+
   NightscoutInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.small
-      KeyName: Publica
-      ImageId: ami-07c0cae188e21a093 # Amazon Linux 2023 - sa-east-1
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: "true"
-          DeviceIndex: "0"
-          GroupSet:
-            - !Ref NightscoutSecurityGroup
-          SubnetId: !If [CreateNetwork, !Ref PublicSubnet, !Ref SubnetId]
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-Instance"
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SecurityGroups:
+        - !Ref NightscoutSecurityGroup
+      ImageId: ami-0c02fb55956c7d316  # Amazon Linux 2023 (verificar região)
+
       UserData:
         Fn::Base64: !Sub |
-          #!/bin/bash -xe
+          #!/bin/bash
+          dnf update -y
 
-          DOMAIN="${DynuDomain}"
-          LOGIN="${DynuLogin}"
+          dnf install -y docker nginx certbot python3-certbot-nginx bind-utils --allowerasing
+
+          systemctl enable docker
+          systemctl start docker
+
+          # Rodar Nightscout
+          docker run -d \
+            --name nightscout \
+            -p 1337:1337 \
+            -e AUTH_DEFAULT_ROLES=denied \
+            -e API_SECRET=${ApiSecret} \
+            -e MONGO_CONNECTION=${MongoConnection} \
+            nightscout/cgm-remote-monitor:latest
+
+          # Configurar Nginx
+          cat > /etc/nginx/conf.d/nightscout.conf <<EOF
+          server {
+              listen 80;
+              server_name ${DomainName};
+
+              location / {
+                  proxy_pass http://localhost:1337;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade \$http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host \$host;
+                  proxy_cache_bypass \$http_upgrade;
+              }
+          }
+          EOF
+
+          systemctl enable nginx
+          systemctl restart nginx
+
+          # Script inteligente Dynu
+          cat > /usr/local/bin/update-dynu.sh <<EOF
+          #!/bin/bash
+
+          HOST="${DomainName}"
+          USER="${DynuUsername}"
           PASS="${DynuPassword}"
-          SECRET="${ApiSecret}"
-          MONGO="${MongoConnection}"
 
-          # ==== Validação de parâmetros ====
-          for var in "$DOMAIN" "$LOGIN" "$PASS" "$SECRET" "$MONGO"; do
-            if [ -z "$var" ]; then
-              echo "❌ Erro: Parâmetro obrigatório ausente. Abortando inicialização."
-              exit 1
-            fi
-          done
+          CURRENT_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+          DNS_IP=\$(dig +short \$HOST | tail -n1)
 
-          # ---- Atualização e pacotes principais ----
-          sudo dnf update -y
-          sudo dnf install -y wget docker git curl perl perl-IO-Socket-SSL nginx certbot python3-certbot-nginx bind-utils --allowerasing
+          if [ "\$CURRENT_IP" != "\$DNS_IP" ]; then
+            echo "IP mudou. Atualizando Dynu..."
+            curl -s "https://api.dynu.com/nic/update?hostname=\$HOST&myip=\$CURRENT_IP" \
+              --user "\$USER:\$PASS"
+          else
+            echo "IP já correto."
+          fi
+          EOF
 
-          # ---- Configuração Dynu DDNS (ddclient) ----
-          curl -L https://cpanmin.us | sudo perl - App::cpanminus
-          sudo cpanm --notest JSON Data::Validate::IP
-          git clone https://github.com/ddclient/ddclient.git /tmp/ddclient
-          sudo cp /tmp/ddclient/ddclient.in /usr/local/bin/ddclient
-          sudo chmod +x /usr/local/bin/ddclient
-          sudo mkdir -p /etc/ddclient/
-          cat > /etc/ddclient/ddclient.conf <<EOL
-          protocol=dyndns2
-          use=web, web=ifconfig.me
-          server=api.dynu.com
-          login=$LOGIN
-          password=$PASS
-          $DOMAIN
-          EOL
-          cat > /etc/systemd/system/ddclient.service <<EOS
-          [Unit]
-          Description=Dynamic DNS Update Client
-          After=network.target
-          [Service]
-          Type=simple
-          ExecStart=/usr/local/bin/ddclient -foreground -file /etc/ddclient/ddclient.conf
-          Restart=always
-          [Install]
-          WantedBy=multi-user.target
-          EOS
-          sudo systemctl daemon-reload
-          sudo systemctl enable --now ddclient
+          chmod +x /usr/local/bin/update-dynu.sh
 
-          # ---- Docker + Nightscout ----
-          sudo systemctl enable --now docker
-          mkdir -p /opt/nightscout
-          cd /opt/nightscout
-          git clone https://github.com/nightscout/cgm-remote-monitor.git .
-          docker build -t nightscout .
+          # Executa na inicialização
+          /usr/local/bin/update-dynu.sh
 
-          # ---- Serviço do Nightscout ----
-          cat > /etc/systemd/system/nightscout.service <<EON
-          [Unit]
-          Description=Nightscout Service (Docker)
-          After=docker.service
-          Requires=docker.service
-          [Service]
-          Restart=always
-          ExecStart=/usr/bin/docker run --rm --name nightscout -p 1337:1337 \
-            -e AUTH_DEFAULT_ROLES='denied' \
-            -e API_SECRET='$SECRET' \
-            -e MONGO_CONNECTION='$MONGO' \
-            -e ENABLE='careportal basal dbsize rawbg iob maker bridge cob bwp cage iage sage boluscalc pushover treatmentnotify mmconnect loop pump profile food openaps bage alexa override cors' \
-            -e INSECURE_USE_HTTP=true \
-            nightscout
-          [Install]
-          WantedBy=multi-user.target
-          EON
+          # Cron a cada 5 minutos
+          echo "*/5 * * * * root /usr/local/bin/update-dynu.sh >> /var/log/dynu.log 2>&1" > /etc/cron.d/dynu-update
 
-          sudo systemctl enable nightscout
-          sudo systemctl start nightscout
-
-# ===========================================================
-# SAÍDAS
-# ===========================================================
-Outputs:
-  InstancePublicIP:
-    Description: "IP público da instância Nightscout"
-    Value: !GetAtt NightscoutInstance.PublicIp
-
-  NightscoutURL:
-    Description: "Endereço de acesso via Dynu"
-    Value: !Sub "https://${DynuDomain}"
-
+          # Emitir SSL automaticamente
+          certbot --nginx --non-interactive --agree-tos -m admin@${DomainName} -d ${DomainName} || true
