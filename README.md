@@ -207,14 +207,6 @@ Após o deploy, você pode acessar os logs:
 
 ## 🌐 Acesso ao Nightscout
 
-Após o deploy, vá em:
-
-**CloudFormation → Pilhas → [Sua Pilha] → Aba "Saídas" (Outputs)**
-
-Você verá:
-- **InstancePublicIP** → IP público da instância EC2  
-- **NightscoutURL** → domínio Dynu configurado  
-
 Acesse pelo navegador:
 ```
 https://seudominio.ddnsfree.com
@@ -223,6 +215,14 @@ https://seudominio.ddnsfree.com
 > ⚠️ Pode levar até **2 minutos** após o boot inicial para o Dynu sincronizar o IP.
 
 ---
+
+## Investigação e visualização da execução do Script
+Após o deploy, vá em:
+
+1. Ec2 → Instancias → Marque a caixa da instancia Criada e depois clique em Conectar
+2. No terminal que vai abrir digite o comando: sudo tail -f /var/log/cloud-init-output.log
+3. Esse comando vai mostrar o logs em tempo real da execução do script.
+4. Caso já tenha sido tudo executado execute para ver o log completo:  sudo less /var/log/cloud-init-output.log 
 
 ## 🔒 Boas Práticas de Segurança
 
