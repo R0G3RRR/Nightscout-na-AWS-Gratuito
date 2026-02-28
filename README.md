@@ -220,9 +220,9 @@ https://seudominio.ddnsfree.com
 Após o deploy, vá em:
 
 1. Ec2 → Instancias → Marque a caixa da instancia Criada e depois clique em Conectar
-2. No terminal que vai abrir digite o comando: sudo tail -f /var/log/cloud-init-output.log
+2. No terminal que vai abrir digite o comando: ```sudo tail -f /var/log/cloud-init-output.log```
 3. Esse comando vai mostrar o logs em tempo real da execução do script.
-4. Caso já tenha sido tudo executado execute para ver o log completo:  sudo less /var/log/cloud-init-output.log 
+4. Caso já tenha sido tudo executado execute para ver o log completo:  ```sudo less /var/log/cloud-init-output.log ```
 
 ## 🔒 Boas Práticas de Segurança
 
